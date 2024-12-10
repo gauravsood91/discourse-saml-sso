@@ -3,17 +3,17 @@
 # version: 0.1
 # author: Robin Ward
 
-require_dependency 'auth/oauth2_authenticator'
+#require_dependency 'auth/oauth2_authenticator'
 
-gem 'macaddr', '1.0.0'
-gem 'uuid', '2.3.7'
-gem 'ruby-saml', '1.8.0'
-gem "omniauth-saml", '1.10.0'
+gem 'macaddr', '1.7.2'
+gem 'uuid', '2.3.9'
+gem 'ruby-saml', '1.17.0'
+gem "omniauth-saml", '2.2.1'
 #gem 'saml2ruby', '1.1.0'
 
 request_method = GlobalSetting.try(:saml_request_method) || 'get'
 
-class SamlAuthenticator < ::Auth::OAuth2Authenticator
+class SamlAuthenticator
   def register_middleware(omniauth)
     omniauth.provider :saml,
                       :name => 'saml',
@@ -26,6 +26,9 @@ class SamlAuthenticator < ::Auth::OAuth2Authenticator
                       :custom_url => (GlobalSetting.try(:saml_request_method) == 'post') ? "/discourse_saml" : nil
   end
   
+  def enabled?
+    return true
+  end
   
   
   def after_authenticate(auth)
@@ -185,10 +188,5 @@ title = GlobalSetting.try(:saml_title) || "SAML"
 button_title = GlobalSetting.try(:saml_button_title) || GlobalSetting.try(:saml_title) || "with SAML"
 
 auth_provider :title => button_title,
-              :authenticator => SamlAuthenticator.new('saml'),
-              :message => "Authorizing with #{title} (make sure pop up blockers are not enabled)",
-              :frame_width => 600,
-              :frame_height => 380,
-              :background_color => '#003366',
-              :full_screen_login => GlobalSetting.try(:saml_full_screen_login) || false,
+              :authenticator => SamlAuthenticator.new(),
               :custom_url => request_method == 'post' ? "/discourse_saml" : nil
