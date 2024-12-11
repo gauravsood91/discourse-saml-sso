@@ -15,6 +15,7 @@ request_method = GlobalSetting.try(:saml_request_method) || 'get'
 
 class SamlAuthenticator
   def register_middleware(omniauth)
+    Rails.logger.debug 'registering SAML Plugin'
     omniauth.provider :saml,
                       :name => 'saml',
                       :issuer => Discourse.base_url,
@@ -24,6 +25,7 @@ class SamlAuthenticator
                       :attribute_statements => { :nickname => ['screenName'] },
                       :assertion_consumer_service_url => Discourse.base_url + "/auth/saml/callback",
                       :custom_url => (GlobalSetting.try(:saml_request_method) == 'post') ? "/discourse_saml" : nil
+    Rails.logger.debug 'registered SAML Plugin: Done'
   end
   
   def enabled?
