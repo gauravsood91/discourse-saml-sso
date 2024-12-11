@@ -29,7 +29,7 @@ class SamlAuthenticator
   end
   
   def enabled?
-    return nil
+    true
   end
   
   
