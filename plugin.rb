@@ -5,10 +5,9 @@
 
 #require_dependency 'auth/oauth2_authenticator'
 
-gem 'macaddr', '1.7.2'
+#gem 'macaddr', '1.7.2'
 #gem 'uuid', '2.3.9'
-gem 'ruby-saml', '1.17.0'
-gem "omniauth-saml", '2.2.1'
+#gem 'ruby-saml', '1.17.0'
 #gem "systemu", '2.6.5'
 #gem 'saml2ruby', '1.1.0'
 
