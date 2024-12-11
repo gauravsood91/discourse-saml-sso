@@ -146,6 +146,7 @@ if request_method == 'post'
     class DiscourseSaml::DiscourseSamlController < ::ApplicationController
       skip_before_filter :check_xhr
       def index
+        Rails.logger.debug 'checking if this is being called'
         authn_request = OneLogin::RubySaml::Authrequest.new
 
         metadata_url = GlobalSetting.try(:saml_metadata_url)
