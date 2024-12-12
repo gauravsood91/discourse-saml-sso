@@ -1,195 +1,114 @@
+# frozen_string_literal: true
+
 # name: discourse-saml
 # about: SAML Auth Provider
-# version: 0.1
-# author: Robin Ward
+# version: 1.0
+# author: Discourse Team
+# url: https://github.com/discourse/discourse-saml
 
-#require_dependency 'auth/oauth2_authenticator'
+#gem "macaddr", "1.0.0"
+#gem "uuid", "2.3.7"
+#gem "ruby-saml", "1.17.0"
 
-#gem 'macaddr', '1.7.2'
-#gem 'uuid', '2.3.9'
-#gem 'ruby-saml', '1.17.0'
-#gem "systemu", '2.6.5'
-#gem 'saml2ruby', '1.1.0'
-
-request_method = GlobalSetting.try(:saml_request_method) || 'get'
-
-class SamlAuthenticator
-  def register_middleware(omniauth)
-    Rails.logger.debug 'registering SAML Plugin'
-    omniauth.provider :saml,
-                      :name => 'saml',
-                      :issuer => Discourse.base_url,
-                      :idp_sso_target_url => GlobalSetting.saml_target_url,
-                      :idp_cert_fingerprint => GlobalSetting.try(:saml_cert_fingerprint),
-                      :idp_cert => GlobalSetting.try(:saml_cert),
-                      :attribute_statements => { :nickname => ['screenName'] },
-                      :assertion_consumer_service_url => Discourse.base_url + "/auth/saml/callback",
-                      :custom_url => (GlobalSetting.try(:saml_request_method) == 'post') ? "/discourse_saml" : nil
-    Rails.logger.debug 'registered SAML Plugin: Done'
-  end
-  
-  def enabled?
-    true
-  end
-  
-  
-  def after_authenticate(auth)
-    Rails.logger.info 'after authenticate'
-    result = Auth::Result.new
-
-    if GlobalSetting.try(:saml_log_auth)
-      ::PluginStore.set("saml", "saml_last_auth", auth.inspect)
-      ::PluginStore.set("saml", "saml_last_auth_raw_info", auth.extra[:raw_info].inspect)
-      ::PluginStore.set("saml", "saml_last_auth_extra", auth.extra.inspect)
-    end
-
-    uid = auth[:uid]
-    result.name = auth[:info].name || uid
-    result.username = uid
-    if auth.extra.present? && auth.extra[:raw_info].present?
-      result.username = auth.extra[:raw_info].attributes['screenName'].try(:first) || uid
-    end
-
-    if GlobalSetting.try(:saml_use_uid) && auth.extra.present? && auth.extra[:raw_info].present?
-      result.username = auth.extra[:raw_info].attributes['uid'].try(:first) || uid
-    end
-
-    result.email = auth[:info].email || uid
-    result.email_valid = true
-    result.skip_email_validation = true
-   
-    result.user =  User.where(username: result.username).first ||
-      User.new(
-        username: result.username,
-            name: result.name,
-           email: result.email,
-           admin: false,
-          active: true,
-        approved: true
-      ).tap(&:save!)
-
-    current_info = ::PluginStore.get("saml", "saml_user_#{uid}")
-    if current_info
-      result.user = User.where(id: current_info[:user_id]).first
-    end
-
-    result.user ||= User.where(email: Email.downcase(result.email)).first
-
-    if GlobalSetting.try(:saml_clear_username) && result.user.blank?
-      result.username = ''
-    end
-    
-    result.extra_data = { saml_user_id: uid }
-    groups = auth.extra[:raw_info].attributes['role']
-    if(result.user) 
-        update_user_groups(result.user, groups)
-    end
-    result
-  end
-
-  def after_create_account(user, auth)
-    groups = auth.extra[:raw_info].attributes['role']
-    ::PluginStore.set("saml", "saml_user_#{auth[:extra_data][:saml_user_id]}", {user_id: user.id })
-    update_user_groups(user, groups)
-  end
-
-  def update_user_groups(user, groups)
-    Rails.logger.info 'update user groups'
-    Group.joins(:users).where(users: { id: user.id } ).each do |c|
-      gname = c.name
-      if groups.include?(gname)
-         groups.delete(gname) # remove it from the list
-      else
-        c.group_users.where(user_id: user.id).destroy_all
-        Rails.logger.info "Would remove group " + c.name
-      end
-    end
-      
-    groups.each do |c|
-    grp = Group.where(name: c).first
-       if not grp.nil?
-         grp.group_users.create(user_id: user.id, group_id: grp.id)
-         Rails.logger.info "adding user to " + grp.name
-       end
-    end
-
-    if groups.include?('discourse-moderators')
-         user.moderator = true
-         user.save
-    else
-        user.moderator = false
-        user.save
-    end
-    if groups.include?('discourse-admins')
-         user.admin = true
-         user.save
-    else
-        user.admin = false
-        user.save
-    end
-      
-  end
-
-
+if OmniAuth.const_defined?(:AuthenticityTokenProtection) # OmniAuth 2.0
+  gem "omniauth-saml", "2.2.1"
+else
+  gem "omniauth-saml", "1.10.5"
 end
 
-if request_method == 'post'
-  after_initialize do
+enabled_site_setting :saml_enabled if !GlobalSetting.try("saml_target_url")
 
-    module ::DiscourseSaml
-      class Engine < ::Rails::Engine
-        engine_name "discourse_saml"
-        isolate_namespace DiscourseSaml
-      end
+on(:before_session_destroy) do |data|
+  next if !DiscourseSaml.setting(:slo_target_url).present?
+  data[:redirect_url] = Discourse.base_path + "/auth/saml/spslo"
+end
+
+module ::DiscourseSaml
+  def self.enabled?
+    # Legacy - we only check the enabled site setting
+    # if the environment-variables are **not** present
+    !!GlobalSetting.try("saml_target_url") || SiteSetting.saml_enabled
+  end
+
+  def self.setting(key, prefer_prefix: "saml_")
+    if prefer_prefix == "saml_"
+      SiteSetting.get("saml_#{key}")
+    else
+      GlobalSetting.try("#{prefer_prefix}#{key}") || SiteSetting.get("saml_#{key}")
     end
+  end
 
-    class DiscourseSaml::DiscourseSamlController < ::ApplicationController
-      skip_before_filter :check_xhr
-      def index
-        Rails.logger.debug 'checking if this is being called'
-        authn_request = OneLogin::RubySaml::Authrequest.new
+  def self.is_saml_forced_domain?(email)
+    return if !enabled?
+    return if !DiscourseSaml.setting(:forced_domains).present?
+    return if email.blank?
 
-        metadata_url = GlobalSetting.try(:saml_metadata_url)
+    DiscourseSaml
+      .setting(:forced_domains)
+      .split(/[,|]/)
+      .each { |domain| return true if email.end_with?("@#{domain}") }
 
-        settings = nil
-
-        if metadata_url
-          idp_metadata_parser = OneLogin::RubySaml::IdpMetadataParser.new
-          settings = idp_metadata_parser.parse_remote(metadata_url)
-          settings.idp_sso_target_url = GlobalSetting.saml_target_url
-          settings.idp_cert ||= GlobalSetting.try(:saml_cert)
-        else
-          settings = OneLogin::RubySaml::Settings.new(:idp_sso_target_url => GlobalSetting.saml_target_url,
-                                                      :idp_cert_fingerprint => GlobalSetting.try(:saml_cert_fingerprint),
-                                                      :idp_cert => GlobalSetting.try(:saml_cert))
-        end
-
-        settings.compress_request = false
-        settings.passive = false
-        settings.issuer = Discourse.base_url
-        settings.assertion_consumer_service_url = Discourse.base_url + "/auth/saml/callback"
-        settings.name_identifier_format = "urn:oasis:names:tc:SAML:2.0:protocol"
-
-        saml_params = authn_request.create_params(settings, {})
-        @saml_req = saml_params['SAMLRequest']
-
-       
-      end
-    end
-
-    DiscourseSaml::Engine.routes.draw do
-      get '/' => 'discourse_saml#index'
-    end
-
-    Discourse::Application.routes.append do
-      mount ::DiscourseSaml::Engine, at: "/discourse_saml"
-    end
+    false
   end
 end
 
-title = GlobalSetting.try(:saml_title) || "SAML"
-button_title = GlobalSetting.try(:saml_button_title) || GlobalSetting.try(:saml_title) || "with SAML"
+after_initialize do
+  if !!GlobalSetting.try("saml_target_url")
+    # Configured via environment variables. Hide all the site settings
+    # from the UI to avoid confusion
+    saml_site_setting_keys = []
 
-auth_provider :title => button_title,
-              :authenticator => SamlAuthenticator.new(),
-              :custom_url => request_method == 'post' ? "/discourse_saml" : nil
+    SiteSetting.defaults.all.keys.each do |k|
+      next if !k.to_s.start_with?("saml_")
+      saml_site_setting_keys << k
+    end
+
+    if SiteSetting.respond_to?(:hidden_settings_provider)
+      register_modifier(:hidden_site_settings) { |hidden| hidden + saml_site_setting_keys }
+    else
+      SiteSetting.hidden_settings.concat(saml_site_setting_keys)
+    end
+  end
+
+  # "SAML Forced Domains" - Prevent login via email
+  on(:before_email_login) do |user|
+    if ::DiscourseSaml.is_saml_forced_domain?(user.email)
+      raise Discourse::InvalidAccess.new(nil, nil, custom_message: "login.use_saml_auth")
+    end
+  end
+
+  # "SAML Forced Domains" - Prevent login via regular username/password
+  module ::DiscourseSaml::SessionControllerExtensions
+    def login_error_check(user)
+      if ::DiscourseSaml.is_saml_forced_domain?(user.email)
+        return { error: I18n.t("login.use_saml_auth") }
+      end
+      super
+    end
+  end
+  ::SessionController.prepend(::DiscourseSaml::SessionControllerExtensions)
+
+  # "SAML Forced Domains" - Prevent login via other omniauth strategies
+  class ::DiscourseSaml::ForcedSamlError < StandardError
+  end
+  on(:after_auth) do |authenticator, result|
+    next if authenticator.name == "saml"
+    if [result.user&.email, result.email].any? { |e| ::DiscourseSaml.is_saml_forced_domain?(e) }
+      raise ::DiscourseSaml::ForcedSamlError
+    end
+  end
+  Users::OmniauthCallbacksController.rescue_from(::DiscourseSaml::ForcedSamlError) do
+    flash[:error] = I18n.t("login.use_saml_auth")
+    render("failure")
+  end
+end
+
+require_relative "lib/discourse_saml/saml_omniauth_strategy"
+require_relative "lib/saml_authenticator"
+
+# Allow GlobalSettings to override the translations
+# If the global settings are not provided, will use the `js.login.saml.name` and `js.login.saml.title` translations
+name = GlobalSetting.try(:saml_title)
+button_title = GlobalSetting.try(:saml_button_title) || GlobalSetting.try(:saml_title)
+
+auth_provider title: button_title, pretty_name: name, authenticator: SamlAuthenticator.new
