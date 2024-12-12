@@ -6,9 +6,9 @@
 # author: Discourse Team
 # url: https://github.com/discourse/discourse-saml
 
-#gem "macaddr", "1.0.0"
-#gem "uuid", "2.3.7"
-#gem "ruby-saml", "1.17.0"
+gem "macaddr", "1.0.0"
+gem "uuid", "2.3.7"
+gem "ruby-saml", "1.17.0"
 
 if OmniAuth.const_defined?(:AuthenticityTokenProtection) # OmniAuth 2.0
   gem "omniauth-saml", "2.2.1"
